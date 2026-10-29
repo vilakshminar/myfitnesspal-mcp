@@ -180,7 +180,7 @@ class RecipeIngredient(BaseModel):
     )
     amount: float = Field(description="How much, in `unit`s, e.g. 150")
     unit: str = Field(
-        description="One of the food's serving units, e.g. g, tbsp, cup, sheets"
+        description="One of the food's serving units, e.g. gram, g, tablespoon, cup"
     )
 
 
@@ -195,7 +195,8 @@ async def fitness_draft_recipe(
     fitness_create_recipe. Nothing is written to MyFitnessPal.
 
     Find each ingredient with fitness_search_food and pass its external_id,
-    the amount, and a unit the food offers (prefer g for weighed amounts).
+    the amount, and a unit the food offers (for weighed amounts, prefer its
+    gram unit, g or gram).
     servings: how many servings the whole recipe makes. Returns each
     ingredient's calories/protein/carbs/fat, the recipe total, per_serving,
     and a draft_id. If a unit doesn't match, the error lists the units that

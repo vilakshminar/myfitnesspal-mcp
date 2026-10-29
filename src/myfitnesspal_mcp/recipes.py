@@ -7,7 +7,6 @@ from .entry_matching import DiaryLookupError, collapse_whitespace
 from .food_ranking import normalize_query
 from .mfp_web import (
     ORIGIN,
-    api_headers,
     form_headers,
     get_json,
     get_page,
@@ -115,24 +114,16 @@ def _unique_by_name(items: list[dict]) -> dict[str, dict]:
     return {name: item for name, item in by_name.items() if item}
 
 
-def recipe_nutrition(client, items: list[dict] | None = None) -> dict[str, dict]:
-    """Per serving: /v2/recipes reports whole-recipe nutrition."""
-    unique = _unique_by_name(_box_items(client) if items is None else items)
-    per_serving = {name: _per_serving(item) for name, item in unique.items()}
-    return {name: macros for name, macros in per_serving.items() if macros}
-
-
 def _box_details(client) -> dict[str, dict]:
     try:
         items = _box_items(client)
     except Exception as exc:
         logger.warning("listing recipes without macros, /v2/recipes failed: %s", exc)
         return {}
-    nutrition = recipe_nutrition(client, items)
     return {
         name: {
             "recipe_id": str(item["id"]) if item.get("id") else None,
-            **nutrition.get(name, dict.fromkeys(NUTRIENTS)),
+            **(_per_serving(item) or dict.fromkeys(NUTRIENTS)),
         }
         for name, item in _unique_by_name(items).items()
     }
@@ -159,18 +150,24 @@ def search_recipes(client, query: str | None = None, limit: int = 25) -> dict:
     return response
 
 
-def delete_recipe(client, recipe_id: str) -> dict:
-    resp = client.session.get(
-        parse.urljoin(client.BASE_API_URL, f"v2/recipes/{recipe_id}"),
-        headers=api_headers(client, {"Accept": "application/json"}),
+def _box_item(client, recipe_id: str) -> dict | None:
+    return next(
+        (item for item in _box_items(client) if str(item.get("id")) == recipe_id),
+        None,
     )
-    if resp.status_code in (400, 404):
+
+
+def delete_recipe(client, recipe_id: str) -> dict:
+    """Checks the /v2/recipes listing before and after: /v2/recipes/{id} still
+    serves a removed recipe, and /recipe/remove answers a rejected token with
+    the same 302 as a removal (both tried against a real account)."""
+    item = _box_item(client, recipe_id)
+    if item is None:
         raise RecipeNotFound(
             f"no recipe with recipe_id {recipe_id!r}; find the id with "
             "fitness_search_recipes"
         )
-    resp.raise_for_status()
-    name = resp.json()["item"]["name"]
+    name = item["name"]
     box = site_url(client, "recipe/box")
     _, csrf = get_page(client, box)
     resp = client.session.post(
@@ -184,4 +181,8 @@ def delete_recipe(client, recipe_id: str) -> dict:
         allow_redirects=False,
     )
     require_status(resp, "/recipe/remove", (200, 302))
+    if _box_item(client, recipe_id) is not None:
+        raise RuntimeError(
+            f"MyFitnessPal didn't remove {name!r}; it's still in the recipe box"
+        )
     return {"removed": name, "recipe_id": recipe_id}

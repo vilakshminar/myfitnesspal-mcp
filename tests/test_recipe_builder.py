@@ -199,6 +199,44 @@ def test_create_posts_the_draft_and_returns_diary_ids(builder_client, store):
     assert kwargs["headers"]["Authorization"] == "Bearer fake-token"
 
 
+def test_create_succeeds_when_the_tab_fails_after_saving(builder_client, store):
+    draft = recipe_builder.draft_recipe(
+        builder_client, store, "Peas Fry", 2, [ingredient("F1", 100, "g")]
+    )
+    created_tab(builder_client)
+    saving_post = builder_client.session.post
+
+    def post(url, **kwargs):
+        if "food/load_recipes" in url and "v2/recipes" in str(
+            builder_client.session.calls
+        ):
+            return FakeResponse(status_code=502)
+        return saving_post(url, **kwargs)
+
+    builder_client.session.post = post
+    result = recipe_builder.create_recipe(builder_client, store, draft["draft_id"])
+    assert result["recipe_id"] == "777"
+    assert result["food_id"] is None
+    assert result["weight_id"] is None
+
+
+def test_draft_explains_an_unknown_external_id(builder_client, store):
+    builder_client.session.route(
+        "GET", "v2/foods/4809742753?", FakeResponse(status_code=404)
+    )
+    with pytest.raises(recipe_builder.RecipeInputError) as raised:
+        recipe_builder.draft_recipe(
+            builder_client,
+            store,
+            "Peas Fry",
+            1,
+            [ingredient("F1", 100, "g"), ingredient("4809742753", 1, "g")],
+        )
+    assert "ingredient 2: no food with external_id '4809742753'" in str(raised.value)
+    assert "not its food_id" in str(raised.value)
+    assert not mfp_client.is_auth_error(raised.value)
+
+
 def test_create_rejects_food_drafts_and_unknown_ids(builder_client, store):
     food_draft = store.save_draft({"query": "banana", "options": []})
     for draft_id in (food_draft, "missing"):

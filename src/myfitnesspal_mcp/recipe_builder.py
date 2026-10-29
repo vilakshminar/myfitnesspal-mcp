@@ -1,9 +1,12 @@
+import logging
 from urllib import parse
 
 from . import recipes
 from .entry_matching import DiaryLookupError
 from .food_ranking import normalize_query
-from .mfp_web import api_headers, get_json, require_status
+from .mfp_web import api_headers, require_status
+
+logger = logging.getLogger(__name__)
 
 RECIPE_DRAFT = "recipe"
 FOOD_FIELDS = ("nutritional_contents", "serving_sizes", "description", "brand_name")
@@ -20,7 +23,17 @@ class RecipeDraftNotFound(DiaryLookupError):
 def _food(client, external_id: str) -> dict:
     query = parse.urlencode([("fields[]", field) for field in FOOD_FIELDS])
     url = f"{parse.urljoin(client.BASE_API_URL, f'v2/foods/{external_id}')}?{query}"
-    return (get_json(client, url) or {})["item"]
+    resp = client.session.get(
+        url, headers=api_headers(client, {"Accept": "application/json"})
+    )
+    # Tried against a real account: a diary food_id 404s, a malformed id 422s.
+    if resp.status_code in (404, 422):
+        raise RecipeInputError(
+            f"no food with external_id {external_id!r}; pass the external_id "
+            "from fitness_search_food, not its food_id"
+        )
+    resp.raise_for_status()
+    return resp.json()["item"]
 
 
 def _unit_label(serving: dict) -> str:
@@ -164,11 +177,14 @@ def draft_recipe(
 
 def _diary_ids(client, name: str) -> dict:
     wanted = normalize_query(name)
-    rows = [
-        entry
-        for entry in recipes.recipe_entries(client)
-        if normalize_query(entry["name"]) == wanted
-    ]
+    try:
+        entries = recipes.recipe_entries(client)
+    except Exception as exc:
+        # The recipe is already saved, so failing here would invite a retry
+        # that creates it twice.
+        logger.warning("created recipe, but listing the Recipes tab failed: %s", exc)
+        entries = []
+    rows = [entry for entry in entries if normalize_query(entry["name"]) == wanted]
     if len(rows) != 1:
         return {"food_id": None, "weight_id": None}
     return {"food_id": rows[0]["food_id"], "weight_id": rows[0]["weight_id"]}

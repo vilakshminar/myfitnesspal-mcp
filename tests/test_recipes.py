@@ -104,13 +104,14 @@ def test_recipe_entries_stop_on_an_empty_tab():
     assert recipes.recipe_entries(fake) == []
 
 
-def test_recipe_nutrition_is_per_serving():
+def test_box_details_are_per_serving():
     fake = FakeClient()
     fake.session.route(
         "GET", "v2/recipes?offset=0", FakeResponse(json_data={"items": RECIPE_ITEMS})
     )
-    nutrition = recipes.recipe_nutrition(fake)
+    nutrition = recipes._box_details(fake)
     assert nutrition["lentil soup"] == {
+        "recipe_id": None,
         "calories": 300.0,
         "protein": 15.0,
         "carbs": 40.0,
@@ -119,7 +120,7 @@ def test_recipe_nutrition_is_per_serving():
     assert nutrition["lentil curry"]["calories"] == 250.0
 
 
-def test_recipe_nutrition_pages_through_the_api(monkeypatch):
+def test_box_details_page_through_the_api(monkeypatch):
     monkeypatch.setattr(recipes, "API_PAGE_SIZE", 2)
     fake = FakeClient()
     fake.session.route(
@@ -128,14 +129,14 @@ def test_recipe_nutrition_pages_through_the_api(monkeypatch):
     fake.session.route(
         "GET", "offset=2&", FakeResponse(json_data={"items": RECIPE_ITEMS[2:]})
     )
-    assert set(recipes.recipe_nutrition(fake)) == {
+    assert set(recipes._box_details(fake)) == {
         "lentil soup",
         "oat pancakes",
         "lentil curry",
     }
 
 
-def test_recipe_nutrition_drops_names_two_recipes_share():
+def test_box_details_drop_names_two_recipes_share():
     fake = FakeClient()
     items = [
         recipe_item("Lentil Soup", 1.0, 300.0),
@@ -143,7 +144,7 @@ def test_recipe_nutrition_drops_names_two_recipes_share():
         recipe_item("Oat Pancakes", 1.0, 350.0),
     ]
     fake.session.route("GET", "v2/recipes", FakeResponse(json_data={"items": items}))
-    assert set(recipes.recipe_nutrition(fake)) == {"oat pancakes"}
+    assert set(recipes._box_details(fake)) == {"oat pancakes"}
 
 
 def test_search_recipes_matches_every_word_and_adds_macros(recipe_client):
@@ -213,19 +214,27 @@ def test_search_recipes_includes_recipe_id_for_deleting(recipe_client):
     assert result["results"][0]["recipe_id"] == "9002"
 
 
+def box_listing(fake, items, *, removes: bool = True):
+    """/v2/recipes drops a recipe once /recipe/remove has removed it."""
+    unrouted_get = fake.session.get
+
+    def get(url, **kwargs):
+        if "v2/recipes?offset=0" not in url:
+            return unrouted_get(url, **kwargs)
+        fake.session.calls.append(("GET", url, kwargs))
+        removed = removes and any(
+            "recipe/remove" in called for _, called, _ in fake.session.calls
+        )
+        listed = [item for item in items if not (removed and item["id"] == 9000)]
+        return FakeResponse(json_data={"items": listed})
+
+    fake.session.get = get
+
+
 @pytest.fixture
 def delete_client():
     fake = FakeClient()
-    fake.session.route(
-        "GET",
-        "v2/recipes/9000",
-        FakeResponse(json_data={"item": {"id": 9000, "name": "Lentil Soup"}}),
-    )
-    fake.session.route(
-        "GET",
-        "v2/recipes/404",
-        FakeResponse(status_code=400, json_data={"error": "validation"}),
-    )
+    box_listing(fake, [{"id": 9000, "name": "Lentil Soup"}])
     fake.session.route(
         "GET",
         "recipe/box",
@@ -240,7 +249,9 @@ def test_delete_recipe_posts_the_box_token(delete_client):
         "removed": "Lentil Soup",
         "recipe_id": "9000",
     }
-    _, url, kwargs = delete_client.session.calls[-1]
+    _, url, kwargs = next(
+        call for call in delete_client.session.calls if call[0] == "POST"
+    )
     assert url.endswith("recipe/remove?recipe_id=9000")
     assert kwargs["data"]["authenticity_token"] == "DIARYTOKEN"
 
@@ -249,3 +260,9 @@ def test_delete_recipe_reports_an_unknown_id(delete_client):
     with pytest.raises(recipes.RecipeNotFound, match="fitness_search_recipes"):
         recipes.delete_recipe(delete_client, "404")
     assert not any(method == "POST" for method, _, _ in delete_client.session.calls)
+
+
+def test_delete_recipe_fails_when_the_recipe_is_still_listed(delete_client):
+    box_listing(delete_client, [{"id": 9000, "name": "Lentil Soup"}], removes=False)
+    with pytest.raises(RuntimeError, match="didn't remove 'Lentil Soup'"):
+        recipes.delete_recipe(delete_client, "9000")
