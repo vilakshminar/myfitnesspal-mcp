@@ -5,6 +5,7 @@ from typing import Any
 
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.types import ToolAnnotations
+from pydantic import BaseModel, Field
 
 from . import (
     diary,
@@ -14,6 +15,8 @@ from . import (
     measurements,
     mfp_client,
     notes,
+    recipe_builder,
+    recipes,
     refresh,
     sync,
     water,
@@ -137,6 +140,9 @@ async def fitness_search_food(
 
     Each candidate has name, brand, calories, macros, serving, and the
     food_id + weight_id to pass to fitness_log_food to log exactly that item.
+    Its external_id identifies the food as a fitness_draft_recipe ingredient.
+    The database doesn't include recipes the user created; find those with
+    fitness_search_recipes.
     """
 
     def op(store, client):
@@ -146,6 +152,97 @@ async def fitness_search_food(
         }
 
     return await with_session(ctx, op)
+
+
+@mcp.tool(title="Search your recipes", annotations=READS_MFP)
+async def fitness_search_recipes(
+    query: str | None = None, limit: int = 25, ctx: Context = None
+) -> dict:
+    """Search the recipes the user created in MyFitnessPal (their recipe box).
+
+    fitness_search_food and fitness_draft_food never return these. query
+    matches recipes whose name contains every word; omit it to list them
+    all. Each result has name, serving, per-serving calories/protein/carbs/fat
+    (null when unknown), the food_id + weight_id to pass to fitness_log_food,
+    and the recipe_id to pass to fitness_delete_recipe (null when two recipes
+    share the name). When nothing matches, recipe_names lists every recipe.
+    """
+
+    def op(store, client):
+        return recipes.search_recipes(client, query, limit)
+
+    return await with_session(ctx, op)
+
+
+class RecipeIngredient(BaseModel):
+    external_id: str = Field(
+        description="The food's external_id from fitness_search_food"
+    )
+    amount: float = Field(description="How much, in `unit`s, e.g. 150")
+    unit: str = Field(
+        description="One of the food's serving units, e.g. g, tbsp, cup, sheets"
+    )
+
+
+@mcp.tool(title="Draft a recipe", annotations=READS_MFP)
+async def fitness_draft_recipe(
+    name: str,
+    servings: float,
+    ingredients: list[RecipeIngredient],
+    ctx: Context = None,
+) -> dict:
+    """Preview a new MyFitnessPal recipe before saving it with
+    fitness_create_recipe. Nothing is written to MyFitnessPal.
+
+    Find each ingredient with fitness_search_food and pass its external_id,
+    the amount, and a unit the food offers (prefer g for weighed amounts).
+    servings: how many servings the whole recipe makes. Returns each
+    ingredient's calories/protein/carbs/fat, the recipe total, per_serving,
+    and a draft_id. If a unit doesn't match, the error lists the units that
+    food offers; a recipe name already in use is refused. Drafts last 24 hours.
+    """
+
+    def op(store, client):
+        return recipe_builder.draft_recipe(
+            client,
+            store,
+            name,
+            servings,
+            [ingredient.model_dump() for ingredient in ingredients],
+        )
+
+    return await with_session(ctx, op)
+
+
+@mcp.tool(title="Create recipe", annotations=ADDS_TO_MFP)
+async def fitness_create_recipe(draft_id: str, ctx: Context = None) -> dict:
+    """Save a fitness_draft_recipe draft as a private recipe in the user's
+    MyFitnessPal recipe box.
+
+    Returns recipe_id, per_serving macros, and the food_id + weight_id to log
+    it with fitness_log_food (null if the recipe tab doesn't list it yet; find
+    it with fitness_search_recipes). Each call creates a recipe, so call it
+    once per draft.
+    """
+
+    def op(store, client):
+        return recipe_builder.create_recipe(client, store, draft_id)
+
+    return {"ok": True, **await with_session(ctx, op)}
+
+
+@mcp.tool(title="Delete recipe", annotations=CHANGES_MFP)
+async def fitness_delete_recipe(recipe_id: str, ctx: Context = None) -> dict:
+    """Remove one of the user's recipes from their MyFitnessPal recipe box.
+
+    recipe_id: from fitness_search_recipes or fitness_create_recipe. Diary
+    entries already logged from the recipe are not removed.
+    """
+
+    def op(store, client):
+        return recipes.delete_recipe(client, recipe_id)
+
+    return {"ok": True, **await with_session(ctx, op)}
 
 
 @mcp.tool(title="Draft food entry", annotations=READS_MFP)
@@ -228,7 +325,8 @@ async def fitness_log_food(
 
     With only `query`: logs a pinned food, or the single exact-name match;
     otherwise nothing is logged and a draft is returned (needs_choice=true)
-    to pick from. With food_id + weight_id (from fitness_search_food): logs
+    to pick from. With food_id + weight_id (from fitness_search_food or
+    fitness_search_recipes): logs
     exactly that item, `query` being its display name.
 
     meal: breakfast|lunch|dinner|snacks (default breakfast) or any meal name
