@@ -118,3 +118,8 @@ def test_food_candidates_build_ranking_shape(client):
     ]
     assert banana_bread["default_weight_id"] == "30"
     assert banana_bread["nutrition"] == {"calories": 196.0}
+
+
+def test_search_food_returns_the_external_id_recipes_take(client):
+    candidates = food_search.search_food(client, "banana", limit=2, with_macros=False)
+    assert [c["external_id"] for c in candidates] == ["999", None]

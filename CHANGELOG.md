@@ -8,6 +8,18 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- `fitness_search_recipes` finds the recipes you created in MyFitnessPal,
+  which food search never returns, with per-serving calories and macros and
+  the `food_id` and `weight_id` to log one with `fitness_log_food`.
+- `fitness_draft_recipe` and `fitness_create_recipe` build a private recipe in
+  your MyFitnessPal recipe box from foods found with `fitness_search_food`.
+  The draft shows each ingredient's macros and the per-serving totals before
+  anything is saved, and refuses units the food doesn't offer or a name
+  that's already taken.
+- `fitness_delete_recipe` removes a recipe from your recipe box.
+- `fitness_search_food` results include the food's `external_id`, which
+  recipe ingredients take, and `fitness_search_recipes` results include the
+  `recipe_id` that `fitness_delete_recipe` takes.
 - An icon, a website link and a clearer description in `server.json`, so the
   MCP Registry and the directories that mirror it show the server properly.
 - `glama.json`, so the Glama listing can be claimed from the repo.

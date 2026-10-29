@@ -222,7 +222,7 @@ def log_from_draft(
     page: tuple | None = None,
 ) -> dict:
     body = store.draft(draft_id)
-    if body is None:
+    if body is None or "options" not in body:
         raise DraftNotFound(
             f"draft {draft_id!r} not found or expired (drafts last 24 hours); "
             "call fitness_draft_food again"

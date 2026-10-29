@@ -40,6 +40,9 @@ The package is `src/myfitnesspal_mcp/`. A tool call flows top to bottom:
   SQL don't go here.
 - `food_logging.py` owns the draft, confirm, and pin flow for logging food.
   `food_ranking.py` ranks candidates as pure functions.
+- `recipes.py` reads the recipe box (the diary's Recipes tab for loggable
+  ids, `/v2/recipes` for macros) and removes recipes. `recipe_builder.py` owns
+  the draft and create flow for new recipes.
 - One module per MFP feature makes the web requests: `diary.py` (meals,
   entries, adding and removing food), `food_search.py`, `measurements.py`,
   `water.py`, `notes.py`, and `exercise.py`. Each function takes the client
